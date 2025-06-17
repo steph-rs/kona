@@ -830,8 +830,8 @@ required trait implementations are the providers stubbed with <code>todo!()</cod
 </span><span class="boring">fn main() {
 </span>use std::sync::Arc;
 use kona_genesis::RollupConfig;
-use kona_derive::pipeline::PipelineBuilder;
-use kona_derive::attributes::StatefulAttributesBuilder;
+use kona_derive::PipelineBuilder;
+use kona_derive::StatefulAttributesBuilder;
 
 // The rollup config for your chain.
 let cfg = Arc::new(RollupConfig::default());
@@ -873,8 +873,8 @@ trait is the <a href="https://docs.rs/kona-derive/latest/kona_derive/traits/trai
 </span>use async_trait::async_trait;
 use alloy_primitives::Bytes;
 use kona_protocol::BlockInfo;
-use kona_derive::traits::DataAvailabilityProvider;
-use kona_derive::errors::PipelineResult;
+use kona_derive::DataAvailabilityProvider;
+use kona_derive::PipelineResult;
 
 /// ExampleAvail
 ///
@@ -1874,7 +1874,7 @@ it needs to be decompressed using the respective (de)compression algorithm
 decompressed, the raw data can be <a href="https://docs.rs/kona-protocol/latest/kona_protocol/enum.Batch.html#method.decode">decoded</a> into the <a href="https://docs.rs/kona-protocol/latest/kona_protocol/enum.Batch.html"><code>Batch</code></a>
 type.</p>
 <h2 id="sections"><a class="header" href="#sections">Sections</a></h2>
-<h4 id="core-derviation-types-discussed-above"><a class="header" href="#core-derviation-types-discussed-above">Core Derviation Types (discussed above)</a></h4>
+<h4 id="core-derivation-types-discussed-above"><a class="header" href="#core-derivation-types-discussed-above">Core Derivation Types (discussed above)</a></h4>
 <ul>
 <li><a href="protocol/protocol/./frames.html">Frames</a></li>
 <li><a href="protocol/protocol/./channels.html">Channels</a></li>
@@ -2032,7 +2032,7 @@ L2 chain. It contains the "L1 origin" which is a set of block info for the L1
 block that this L2 block "originated".</p>
 <p>Similarly to the <a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.BlockInfo.html"><code>BlockInfo</code></a> type, <code>L2BlockInfo</code> is a subset of information
 provided by a block header, used for protocol operations.</p>
-<p><a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.L2BlockInfo.html"><code>L2BlockInfo</code></a> provides a <a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.L2BlockInfo.html#method.from_block_and_genesis"><code>from_block_and_gensis</code></a> method to
+<p><a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.L2BlockInfo.html"><code>L2BlockInfo</code></a> provides a <a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.L2BlockInfo.html#method.from_block_and_genesis"><code>from_block_and_genesis</code></a> method to
 construct the <a href="https://docs.rs/kona-protocol/latest/kona_protocol/struct.L2BlockInfo.html"><code>L2BlockInfo</code></a> from a block and <code>ChainGenesis</code>.</p>
 <!-- Links -->
 <div style="break-before: page; page-break-before: always;"></div><style>
