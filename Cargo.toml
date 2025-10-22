@@ -159,9 +159,9 @@ op-alloy-rpc-types-engine = { version = "0.21.0", default-features = false }
 
 # Execution
 revm = { version = "30.0.0", default-features = false }
-op-revm = { version = "11.0.0", default-features = false }
-alloy-evm = { version = "0.22.3", default-features = false }
-alloy-op-evm = { version = "0.22.3", default-features = false }
+op-revm = { version = "11.2.0", default-features = false }
+alloy-evm = { version = "0.22.4", default-features = false }
+alloy-op-evm = { version = "0.22.4", default-features = false }
 
 # Reth (pinned to v1.6.0 for kona-supervisor-storage)
 reth-db-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.6.0" }
