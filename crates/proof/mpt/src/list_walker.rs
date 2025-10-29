@@ -239,4 +239,179 @@ mod test {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn test_already_hydrated_error() {
+        const VALUES: [&str; 2] = ["test one", "test two"];
+
+        let mut trie = ordered_trie_with_encoder(&VALUES, |v, buf| v.encode(buf));
+        let root = trie.root();
+
+        let preimages = trie.take_proof_nodes().into_inner().into_iter().fold(
+            BTreeMap::default(),
+            |mut acc, (_, value)| {
+                acc.insert(keccak256(value.as_ref()), value);
+                acc
+            },
+        );
+
+        let fetcher = TrieNodeProvider::new(preimages);
+        let mut list = OrderedListWalker::try_new_hydrated(root, &fetcher).unwrap();
+
+        // Try to hydrate again - should fail
+        let result = list.hydrate(&fetcher);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), OrderedListWalkerError::AlreadyHydrated);
+    }
+
+    #[test]
+    fn test_large_list_walker() {
+        // Create a list with more than 0x80 (128) elements
+        let values = (0..150).map(|i| format!("value_{}", i)).collect::<Vec<_>>();
+        let value_refs = values.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+
+        let mut trie = ordered_trie_with_encoder(&value_refs, |v, buf| v.encode(buf));
+        let root = trie.root();
+
+        let preimages = trie.take_proof_nodes().into_inner().into_iter().fold(
+            BTreeMap::default(),
+            |mut acc, (_, value)| {
+                acc.insert(keccak256(value.as_ref()), value);
+                acc
+            },
+        );
+
+        let fetcher = TrieNodeProvider::new(preimages);
+        let list = OrderedListWalker::try_new_hydrated(root, &fetcher).unwrap();
+
+        let decoded = list
+            .inner
+            .unwrap()
+            .iter()
+            .map(|(_, v)| String::decode(&mut v.as_ref()).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(decoded, value_refs);
+    }
+
+    #[test]
+    fn test_invalid_node_type_error() {
+        use crate::TrieNode;
+        use alloy_primitives::b256;
+
+        // Create a blinded node at the root level - this should trigger InvalidNodeType
+        let blinded_node = TrieNode::Blinded {
+            commitment: b256!("0x1234567890123456789012345678901234567890123456789012345678901234"),
+        };
+
+        let result = OrderedListWalker::<NoopTrieProvider>::fetch_leaves(&blinded_node, &NoopTrieProvider);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_iterator_exhaustion() {
+        const VALUES: [&str; 3] = ["one", "two", "three"];
+
+        let mut trie = ordered_trie_with_encoder(&VALUES, |v, buf| v.encode(buf));
+        let root = trie.root();
+
+        let preimages = trie.take_proof_nodes().into_inner().into_iter().fold(
+            BTreeMap::default(),
+            |mut acc, (_, value)| {
+                acc.insert(keccak256(value.as_ref()), value);
+                acc
+            },
+        );
+
+        let fetcher = TrieNodeProvider::new(preimages);
+        let mut list = OrderedListWalker::try_new_hydrated(root, &fetcher).unwrap();
+
+        // Exhaust the iterator
+        for _ in 0..3 {
+            assert!(list.next().is_some());
+        }
+
+        // Should now be None and inner should be cleared
+        assert!(list.next().is_none());
+        assert!(list.inner.is_none());
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        use alloy_primitives::b256;
+
+        let walker = OrderedListWalker::<NoopTrieProvider>::new(
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234"),
+        );
+
+        let debug_str = format!("{:?}", walker);
+        assert!(debug_str.contains("OrderedListWalker"));
+        assert!(debug_str.contains("root"));
+    }
+
+    #[test]
+    fn test_clone() {
+        use alloy_primitives::b256;
+
+        let root = b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+        let walker1 = OrderedListWalker::<NoopTrieProvider>::new(root);
+        let _walker2 = walker1.clone();
+
+        // Just verify clone works
+        assert!(true);
+    }
+
+    #[test]
+    fn test_take_inner() {
+        const VALUES: [&str; 2] = ["test", "values"];
+
+        let mut trie = ordered_trie_with_encoder(&VALUES, |v, buf| v.encode(buf));
+        let root = trie.root();
+
+        let preimages = trie.take_proof_nodes().into_inner().into_iter().fold(
+            BTreeMap::default(),
+            |mut acc, (_, value)| {
+                acc.insert(keccak256(value.as_ref()), value);
+                acc
+            },
+        );
+
+        let fetcher = TrieNodeProvider::new(preimages);
+        let mut list = OrderedListWalker::try_new_hydrated(root, &fetcher).unwrap();
+
+        // Take the inner list
+        let taken = list.take_inner();
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().len(), 2);
+
+        // Inner should now be None
+        assert!(list.inner.is_none());
+    }
+
+    #[test]
+    fn test_rehydrate_after_exhaustion() {
+        const VALUES: [&str; 2] = ["one", "two"];
+
+        let mut trie = ordered_trie_with_encoder(&VALUES, |v, buf| v.encode(buf));
+        let root = trie.root();
+
+        let preimages = trie.take_proof_nodes().into_inner().into_iter().fold(
+            BTreeMap::default(),
+            |mut acc, (_, value)| {
+                acc.insert(keccak256(value.as_ref()), value);
+                acc
+            },
+        );
+
+        let fetcher = TrieNodeProvider::new(preimages.clone());
+        let mut list = OrderedListWalker::try_new_hydrated(root, &fetcher).unwrap();
+
+        // Exhaust the iterator
+        while list.next().is_some() {}
+
+        // Should be able to re-hydrate after exhaustion
+        let result = list.hydrate(&fetcher);
+        assert!(result.is_ok());
+        assert!(list.inner.is_some());
+    }
 }
