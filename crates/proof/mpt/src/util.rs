@@ -88,3 +88,64 @@ pub(crate) fn unpack_path_to_nibbles(first: Option<u8>, rest: &[u8]) -> Nibbles 
     let rest = Nibbles::unpack(rest);
     Nibbles::from_iter_unchecked(first.into_iter().chain(rest.to_vec()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_rlp::Encodable;
+
+    #[test]
+    fn test_adjust_index_for_rlp_small() {
+        assert_eq!(adjust_index_for_rlp(0, 100), 1);
+        assert_eq!(adjust_index_for_rlp(5, 100), 6);
+        assert_eq!(adjust_index_for_rlp(0x7e, 100), 0x7f);
+    }
+
+    #[test]
+    fn test_adjust_index_for_rlp_boundary() {
+        // At 0x7f boundary
+        assert_eq!(adjust_index_for_rlp(0x7f, 200), 0);
+        // Past 0x7f
+        assert_eq!(adjust_index_for_rlp(0x80, 200), 0x80);
+        assert_eq!(adjust_index_for_rlp(0x81, 200), 0x81);
+    }
+
+    #[test]
+    fn test_adjust_index_for_rlp_last_element() {
+        // Last element (i + 1 == len)
+        assert_eq!(adjust_index_for_rlp(99, 100), 0);
+        assert_eq!(adjust_index_for_rlp(9, 10), 0);
+    }
+
+    #[test]
+    fn test_rlp_list_element_length_error_on_string() {
+        // Create a RLP-encoded string (not a list)
+        let mut buf = Vec::new();
+        "hello".encode(&mut buf);
+        let mut slice = &buf[..];
+
+        // Should return UnexpectedString error
+        let result = rlp_list_element_length(&mut slice);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), alloy_rlp::Error::UnexpectedString);
+    }
+
+    #[test]
+    fn test_unpack_path_to_nibbles_with_first() {
+        let rest = vec![0xab, 0xcd];
+        let nibbles = unpack_path_to_nibbles(Some(0x05), &rest);
+
+        // Should have first nibble + unpacked rest
+        assert_eq!(nibbles.len(), 5); // 1 + 4 (2 bytes = 4 nibbles)
+        assert_eq!(nibbles.get(0), Some(0x05));
+    }
+
+    #[test]
+    fn test_unpack_path_to_nibbles_without_first() {
+        let rest = vec![0xab, 0xcd];
+        let nibbles = unpack_path_to_nibbles(None, &rest);
+
+        // Should just unpack rest
+        assert_eq!(nibbles.len(), 4); // 2 bytes = 4 nibbles
+    }
+}

@@ -855,4 +855,598 @@ mod test {
             assert_eq!(trie_root, hb.root());
         }
     }
+
+    // Additional tests for uncovered paths
+
+    #[test]
+    fn test_delete_from_empty() {
+        let mut node = TrieNode::Empty;
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03]);
+
+        let result = node.delete(&path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TrieNodeError::KeyNotFound);
+    }
+
+    #[test]
+    fn test_delete_from_leaf_not_found() {
+        let mut node = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let wrong_path = Nibbles::from_nibbles_unchecked([0x01, 0x03]);
+
+        let result = node.delete(&wrong_path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TrieNodeError::KeyNotFound);
+    }
+
+    #[test]
+    fn test_delete_from_leaf_success() {
+        let mut node = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02]);
+
+        let result = node.delete(&path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+        assert_eq!(node, TrieNode::Empty);
+    }
+
+    #[test]
+    fn test_delete_extension_key_not_found() {
+        let leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x03, 0x04]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let mut node = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(leaf),
+        };
+
+        // Path doesn't match prefix
+        let wrong_path = Nibbles::from_nibbles_unchecked([0x01, 0x05]);
+        let result = node.delete(&wrong_path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TrieNodeError::KeyNotFound);
+    }
+
+    #[test]
+    fn test_delete_extension_exact_match() {
+        let leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x03]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let mut node = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(leaf),
+        };
+
+        // Exact match on extension prefix
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02]);
+        let result = node.delete(&path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+        assert_eq!(node, TrieNode::Empty);
+    }
+
+    #[test]
+    fn test_collapse_extension_to_leaf() {
+        // Extension pointing to a leaf should collapse into a single leaf
+        let leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x03, 0x04]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let mut extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(leaf),
+        };
+
+        let result = extension.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should be collapsed to a leaf with combined prefix
+        match extension {
+            TrieNode::Leaf { prefix, value } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03, 0x04]));
+                assert_eq!(value, bytes!("76616c7565")); // "value"
+            }
+            _ => panic!("Expected Leaf node after collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_extension_to_extension() {
+        // Extension pointing to extension should collapse into single extension
+        let inner_leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x05, 0x06]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let inner_extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x03, 0x04]),
+            node: Box::new(inner_leaf),
+        };
+        let mut outer_extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(inner_extension),
+        };
+
+        let result = outer_extension.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should be collapsed to extension with combined prefix
+        match outer_extension {
+            TrieNode::Extension { prefix, node } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03, 0x04]));
+                match node.as_ref() {
+                    TrieNode::Leaf { .. } => {} // Expected
+                    _ => panic!("Extension should point to leaf"),
+                }
+            }
+            _ => panic!("Expected Extension node after collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_extension_to_empty() {
+        // Extension pointing to empty should become empty
+        let mut extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(TrieNode::Empty),
+        };
+
+        let result = extension.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+        assert_eq!(extension, TrieNode::Empty);
+    }
+
+    #[test]
+    fn test_collapse_branch_with_single_child_leaf() {
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        stack[5] = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x03, 0x04]),
+            value: bytes!("76616c7565"), // "value"
+        };
+
+        let mut branch = TrieNode::Branch { stack };
+        let result = branch.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should collapse to a leaf with branch index prepended
+        match branch {
+            TrieNode::Leaf { prefix, value } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x05, 0x03, 0x04]));
+                assert_eq!(value, bytes!("76616c7565")); // "value"
+            }
+            _ => panic!("Expected Leaf after branch collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_branch_with_single_child_extension() {
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        stack[3] = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x07, 0x08]),
+            node: Box::new(TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x09]),
+                value: bytes!("76616c"), // "val"
+            }),
+        };
+
+        let mut branch = TrieNode::Branch { stack };
+        let result = branch.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should collapse to extension with branch index prepended
+        match branch {
+            TrieNode::Extension { prefix, .. } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x03, 0x07, 0x08]));
+            }
+            _ => panic!("Expected Extension after branch collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_branch_with_single_child_branch() {
+        let mut inner_stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        inner_stack[2] = TrieNode::Leaf {
+            prefix: Nibbles::default(),
+            value: bytes!("76616c"), // "val"
+        };
+
+        let mut outer_stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        outer_stack[7] = TrieNode::Branch { stack: inner_stack };
+
+        let mut branch = TrieNode::Branch { stack: outer_stack };
+        let result = branch.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should collapse to extension pointing to branch
+        match branch {
+            TrieNode::Extension { prefix, node } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x07]));
+                match node.as_ref() {
+                    TrieNode::Branch { .. } => {} // Expected
+                    _ => panic!("Should point to branch"),
+                }
+            }
+            _ => panic!("Expected Extension after branch collapse"),
+        }
+    }
+
+    #[test]
+    fn test_open_path_too_short() {
+        let mut branch = TrieNode::Branch {
+            stack: vec![TrieNode::Empty; BRANCH_LIST_LENGTH],
+        };
+
+        let empty_path = Nibbles::default();
+        let result = branch.open(&empty_path, &NoopTrieProvider);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TrieNodeError::PathTooShort);
+    }
+
+    #[test]
+    fn test_open_leaf_wrong_path() {
+        let mut leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("76616c7565"), // "value"
+        };
+
+        let wrong_path = Nibbles::from_nibbles_unchecked([0x01, 0x03]);
+        let result = leaf.open(&wrong_path, &NoopTrieProvider);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_open_leaf_correct_path() {
+        let mut leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("74657374"), // "test"
+        };
+
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02]);
+        let result = leaf.open(&path, &NoopTrieProvider);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(&mut bytes!("74657374"))); // "test"
+    }
+
+    #[test]
+    fn test_open_extension_wrong_path() {
+        let mut extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x03]),
+                value: bytes!("76616c"), // "val"
+            }),
+        };
+
+        let wrong_path = Nibbles::from_nibbles_unchecked([0x01, 0x05]);
+        let result = extension.open(&wrong_path, &NoopTrieProvider);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_insert_leaf_update_value() {
+        let mut node = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("6f6c64"), // "old"
+        };
+
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02]);
+        let result = node.insert(&path, bytes!("6e6577"), &NoopTrieProvider); // "new"
+        assert!(result.is_ok());
+
+        match node {
+            TrieNode::Leaf { prefix, value } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x01, 0x02]));
+                assert_eq!(value, bytes!("6e6577")); // "new"
+            }
+            _ => panic!("Expected leaf node"),
+        }
+    }
+
+    #[test]
+    fn test_insert_creates_branch_from_leaf() {
+        let mut node = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("666972"), // "fir"
+        };
+
+        // Insert with different second nibble - should create branch
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x03]);
+        let result = node.insert(&path, bytes!("736563"), &NoopTrieProvider); // "sec"
+        assert!(result.is_ok());
+
+        // Should now be an extension pointing to a branch
+        match node {
+            TrieNode::Extension { prefix, node } => {
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x01]));
+                match node.as_ref() {
+                    TrieNode::Branch { stack } => {
+                        // Should have two entries
+                        assert!(matches!(stack[2], TrieNode::Leaf { .. }));
+                        assert!(matches!(stack[3], TrieNode::Leaf { .. }));
+                    }
+                    _ => panic!("Expected branch node"),
+                }
+            }
+            _ => panic!("Expected extension node"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_empty() {
+        let node = TrieNode::Empty;
+        let mut buf = Vec::new();
+        node.encode(&mut buf);
+
+        let decoded = TrieNode::decode(&mut buf.as_slice()).unwrap();
+        assert_eq!(decoded, TrieNode::Empty);
+    }
+
+    #[test]
+    fn test_blind_empty_returns_empty_root() {
+        let node = TrieNode::Empty;
+        assert_eq!(node.blind(), EMPTY_ROOT_HASH);
+    }
+
+    #[test]
+    fn test_delete_path_too_short_branch() {
+        let mut branch = TrieNode::Branch {
+            stack: vec![TrieNode::Empty; BRANCH_LIST_LENGTH],
+        };
+
+        let empty_path = Nibbles::default();
+        let result = branch.delete(&empty_path, &NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), TrieNodeError::PathTooShort);
+    }
+
+    #[test]
+    fn test_encode_extension_with_large_child() {
+        // Create a large branch that will be blinded when encoded in extension
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        for i in 0..16 {
+            stack[i] = TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x0a + i as u8, 0x0b]),
+                value: bytes!("6c617267655f76616c7565"), // "large_value"
+            };
+        }
+
+        let extension = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01]),
+            node: Box::new(TrieNode::Branch { stack }),
+        };
+
+        let mut buf = Vec::new();
+        extension.encode(&mut buf);
+
+        // Should encode successfully with blinded child
+        assert!(!buf.is_empty());
+        assert!(buf.len() < 1000); // Much smaller due to blinding
+    }
+
+    #[test]
+    fn test_encode_branch_with_blinded_children() {
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+
+        // Add some large nodes that will be blinded (>= 32 bytes when encoded)
+        // Create a large value (64 bytes) to ensure blinding
+        let large_value = bytes!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+        for i in 0..5 {
+            let mut inner_stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+            inner_stack[0] = TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x0a, 0x0b]),
+                value: large_value.clone(),
+            };
+            stack[i] = TrieNode::Branch { stack: inner_stack };
+        }
+
+        let branch = TrieNode::Branch { stack };
+        let mut buf = Vec::new();
+        branch.encode(&mut buf);
+
+        // Decode it back
+        let decoded = TrieNode::decode(&mut buf.as_slice()).unwrap();
+        match decoded {
+            TrieNode::Branch { stack: dec_stack } => {
+                // Some children should be blinded
+                let blinded_count = dec_stack.iter().filter(|n| matches!(n, TrieNode::Blinded { .. })).count();
+                assert!(blinded_count > 0);
+            }
+            _ => panic!("Expected branch node"),
+        }
+    }
+
+    #[test]
+    fn test_insert_extension_no_shared_nibbles() {
+        // Extension with prefix [0x01, 0x02]
+        let mut node = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            node: Box::new(TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x03]),
+                value: bytes!("666972737476616c"), // "firstval"
+            }),
+        };
+
+        // Insert with completely different prefix [0x05, 0x06]
+        let path = Nibbles::from_nibbles_unchecked([0x05, 0x06, 0x07]);
+        let result = node.insert(&path, bytes!("7365636f6e6476616c"), &NoopTrieProvider); // "secondval"
+        assert!(result.is_ok());
+
+        // Should create a branch at root level
+        match node {
+            TrieNode::Branch { stack } => {
+                // Should have entries at positions 1 and 5
+                assert!(matches!(stack[1], TrieNode::Extension { .. } | TrieNode::Leaf { .. }));
+                assert!(matches!(stack[5], TrieNode::Extension { .. } | TrieNode::Leaf { .. }));
+            }
+            _ => panic!("Expected branch node after insert with no shared nibbles"),
+        }
+    }
+
+    #[test]
+    fn test_insert_extension_partial_match() {
+        // Extension with longer prefix
+        let mut node = TrieNode::Extension {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03]),
+            node: Box::new(TrieNode::Leaf {
+                prefix: Nibbles::from_nibbles_unchecked([0x04]),
+                value: bytes!("76616c"), // "val"
+            }),
+        };
+
+        // Insert that matches only first 2 nibbles
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x05]);
+        let result = node.insert(&path, bytes!("6e657776616c"), &NoopTrieProvider); // "newval"
+        assert!(result.is_ok());
+
+        // Should split the extension
+        match node {
+            TrieNode::Extension { prefix, node } => {
+                // Common prefix should be [0x01, 0x02]
+                assert_eq!(prefix, Nibbles::from_nibbles_unchecked([0x01, 0x02]));
+                // Should point to a branch
+                match node.as_ref() {
+                    TrieNode::Branch { .. } => {}, // Expected
+                    _ => panic!("Should point to branch"),
+                }
+            }
+            _ => panic!("Expected extension node"),
+        }
+    }
+
+    #[test]
+    fn test_decode_invalid_prefix() {
+        // Create RLP with invalid prefix nibble (not 0, 1, 2, or 3)
+        let mut buf = Vec::new();
+        // Manually create invalid RLP
+        Header { list: true, payload_length: 10 }.encode(&mut buf);
+        bytes!("48").encode(&mut buf); // Invalid prefix (0x4 in high nibble)
+        bytes!("010203").encode(&mut buf);
+        bytes!("76616c7565").encode(&mut buf); // "value"
+
+        let result = TrieNode::decode(&mut buf.as_slice());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_unexpected_list_length() {
+        // Create RLP list with 5 elements (invalid, should be 2 or 17)
+        let mut buf = Vec::new();
+        let five_empty = vec![TrieNode::Empty; 5];
+        five_empty.encode(&mut buf);
+
+        let result = TrieNode::decode(&mut buf.as_slice());
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            alloy_rlp::Error::UnexpectedLength => {}, // Expected
+            _ => panic!("Expected UnexpectedLength error"),
+        }
+    }
+
+    #[test]
+    fn test_open_branch_empty_child() {
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        stack[5] = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x02]),
+            value: bytes!("76616c"), // "val"
+        };
+
+        let mut branch = TrieNode::Branch { stack };
+
+        // Try to open path that leads to empty child
+        let path = Nibbles::from_nibbles_unchecked([0x03, 0x01]);
+        let result = branch.open(&path, &NoopTrieProvider);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_insert_to_empty_creates_leaf() {
+        let mut node = TrieNode::Empty;
+        let path = Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03]);
+        let result = node.insert(&path, bytes!("74657374"), &NoopTrieProvider); // "test"
+
+        assert!(result.is_ok());
+        match node {
+            TrieNode::Leaf { prefix, value } => {
+                assert_eq!(prefix, path);
+                assert_eq!(value, bytes!("74657374")); // "test"
+            }
+            _ => panic!("Expected leaf node"),
+        }
+    }
+
+    #[test]
+    fn test_branch_collapse_with_multiple_children_no_collapse() {
+        let mut stack = vec![TrieNode::Empty; BRANCH_LIST_LENGTH];
+        stack[2] = TrieNode::Leaf {
+            prefix: Nibbles::default(),
+            value: bytes!("76616c31"), // "val1"
+        };
+        stack[5] = TrieNode::Leaf {
+            prefix: Nibbles::default(),
+            value: bytes!("76616c32"), // "val2"
+        };
+
+        let mut branch = TrieNode::Branch { stack: stack.clone() };
+        let result = branch.collapse_if_possible(&NoopTrieProvider, &NoopTrieHinter);
+        assert!(result.is_ok());
+
+        // Should NOT collapse - still has multiple children
+        match branch {
+            TrieNode::Branch { .. } => {}, // Expected - no collapse
+            _ => panic!("Should remain a branch with multiple children"),
+        }
+    }
+
+    #[test]
+    fn test_payload_length_variations() {
+        // Test empty
+        assert_eq!(TrieNode::Empty.payload_length(), 0);
+
+        // Test blinded
+        let blinded = TrieNode::Blinded {
+            commitment: b256!("1234567890123456789012345678901234567890123456789012345678901234"),
+        };
+        assert_eq!(blinded.payload_length(), 32);
+
+        // Test leaf with short value
+        let short_leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01]),
+            value: bytes!("01"),
+        };
+        assert!(short_leaf.payload_length() > 0);
+
+        // Test leaf with long value
+        let long_leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02, 0x03, 0x04]),
+            value: bytes!("0102030405060708090a0b0c0d0e0f10"),
+        };
+        assert!(long_leaf.payload_length() > short_leaf.payload_length());
+    }
+
+    #[test]
+    fn test_length_method() {
+        // Empty is always 1 byte
+        assert_eq!(TrieNode::Empty.length(), 1);
+
+        // Leaf length
+        let leaf = TrieNode::Leaf {
+            prefix: Nibbles::from_nibbles_unchecked([0x01, 0x02]),
+            value: bytes!("76616c7565"), // "value"
+        };
+        let len = leaf.length();
+        assert!(len > 1);
+
+        // Encode and verify length matches
+        let mut buf = Vec::new();
+        leaf.encode(&mut buf);
+        assert_eq!(buf.len(), len);
+    }
 }
